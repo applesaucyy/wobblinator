@@ -403,7 +403,7 @@ with tab1:
                 with st.spinner("Processing..."):
                     video_bytes = process_single_image(uploaded_img, uploaded_bg, s_fps, s_dur, s_intensity, s_scale)
                     if video_bytes:
-                        st.video(video_bytes)
+                        st.video(video_bytes, autoplay=True, loop=True)
                         st.download_button("Download Video", data=video_bytes, file_name="wobble_image.mp4", mime="video/mp4")
 
 with tab2:
@@ -421,5 +421,5 @@ with tab2:
             with st.spinner("Processing..."):
                 video_bytes = process_video_file(uploaded_vid, v_fps, v_intensity, v_scale)
                 if video_bytes:
-                    st.video(video_bytes)
+                    st.video(video_bytes, autoplay=True, loop=True)
                     st.download_button("Download Video", data=video_bytes, file_name="wobble_video.mp4", mime="video/mp4")
