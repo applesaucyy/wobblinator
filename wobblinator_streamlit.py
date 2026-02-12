@@ -22,7 +22,6 @@ st.markdown("""
         --accent-color: #6366f1;
     }
 
-    /* Global App Background */
     .stApp {
         background-color: var(--bg-color);
         background-image: 
@@ -32,7 +31,6 @@ st.markdown("""
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
 
-    /* Glass Container for Main Content */
     .block-container {
         background: var(--glass-bg);
         backdrop-filter: blur(16px);
@@ -48,7 +46,7 @@ st.markdown("""
     /* Remove Streamlit Default Elements */
     header, footer, #MainMenu {visibility: hidden;}
 
-    /* Typography */
+    /* Typefacing */
     h1 {
         font-weight: 300;
         letter-spacing: 1px;
@@ -60,7 +58,6 @@ st.markdown("""
         color: var(--accent-color);
     }
 
-    /* Tabs Styling */
     .stTabs [data-baseweb="tab-list"] {
         background: transparent;
         gap: 10px;
@@ -79,8 +76,14 @@ st.markdown("""
         color: white !important;
         border-color: var(--accent-color);
     }
+    
+    .stTabs [data-baseweb="tab-highlight"] {
+        display: none;
+    }
+    .stTabs [data-baseweb="tab-border"] {
+        display: none;
+    }
 
-    /* Button Styling */
     .stButton > button {
         background: var(--glass-bg);
         border: 1px solid var(--glass-border);
@@ -99,11 +102,14 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
     }
 
-    /* Inputs & Sliders */
     .stSlider > div > div > div > div { background-color: var(--accent-color); }
     .stNumberInput input { color: white; background: rgba(0,0,0,0.2); border-radius: 8px; }
     
-    /* File Uploader */
+    .stProgress > div > div > div > div {
+        background-image: none !important;
+        background-color: var(--accent-color) !important;
+    }
+    
     [data-testid="stFileUploader"] {
         background: rgba(0,0,0,0.2);
         border: 2px dashed var(--glass-border);
@@ -160,15 +166,27 @@ def generate_noise_map(w, h, wave_scale, intensity, map_x_base, map_y_base):
     map_y = map_y_base + (noise_y_full * intensity * 3)
     return map_x, map_y
 
-def process_single_image(image_file, fps, duration, intensity, scale):
-    # Load
+def process_single_image(image_file, background_file, fps, duration, intensity, scale):
+    # Load FG
     file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
     fg_cv_image = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
     
     h, w = fg_cv_image.shape[:2]
-    total_frames = int(fps * duration)
     
-    # Timing
+    # Load BG (if present)
+    bg_cv_image = None
+    if background_file:
+        bg_bytes = np.asarray(bytearray(background_file.read()), dtype=np.uint8)
+        bg_raw = cv2.imdecode(bg_bytes, cv2.IMREAD_UNCHANGED)
+        # Resize to match FG
+        bg_cv_image = cv2.resize(bg_raw, (w, h))
+        # Drop alpha from BG if present
+        if len(bg_cv_image.shape) == 3 and bg_cv_image.shape[2] == 4:
+            bg_cv_image = cv2.cvtColor(bg_cv_image, cv2.COLOR_BGRA2BGR)
+        elif len(bg_cv_image.shape) == 2:
+            bg_cv_image = cv2.cvtColor(bg_cv_image, cv2.COLOR_GRAY2BGR)
+
+    total_frames = int(fps * duration)
     frames_per_update = max(1, int(fps / 12))
     
     # Maps
@@ -193,15 +211,21 @@ def process_single_image(image_file, fps, duration, intensity, scale):
                           borderMode=cv2.BORDER_CONSTANT, 
                           borderValue=(0,0,0,0))
         
-        # Alpha Composite
+        # Composite
         if frame.shape[2] == 4:
             b,g,r,a = cv2.split(frame)
             overlay = cv2.merge((b,g,r))
             mask = a / 255.0
-            bg = np.ones_like(overlay, dtype=np.uint8) * 255
-            for c in range(3):
-                bg[:,:,c] = bg[:,:,c] * (1 - mask) + overlay[:,:,c] * mask
-            frame = bg
+            
+            # Use BG image if exists, else White
+            if bg_cv_image is not None:
+                base = bg_cv_image
+            else:
+                base = np.ones_like(overlay, dtype=np.uint8) * 255
+            
+            # Vectorized Blend
+            mask_3d = np.dstack([mask]*3)
+            frame = (base * (1.0 - mask_3d) + overlay * mask_3d).astype(np.uint8)
 
         out.write(frame)
         progress_bar.progress((i + 1) / total_frames)
@@ -258,7 +282,19 @@ def process_video_file(video_file, out_fps, intensity, scale):
 tab1, tab2 = st.tabs(["Single Image", "Video Import"])
 
 with tab1:
-    uploaded_img = st.file_uploader("Upload Image", type=['png', 'jpg', 'jpeg'])
+    st.header("Single Image Animation")
+    
+    use_2_layer = st.checkbox("Enable 2-Layer Mode (Static Background)", value=False)
+    
+    col_u1, col_u2 = st.columns(2)
+    with col_u1:
+        fg_label = "Foreground (Lineart)" if use_2_layer else "Upload Image"
+        uploaded_img = st.file_uploader(fg_label, type=['png', 'jpg', 'jpeg'], key="fg")
+    
+    with col_u2:
+        uploaded_bg = None
+        if use_2_layer:
+            uploaded_bg = st.file_uploader("Background (Static)", type=['png', 'jpg', 'jpeg'], key="bg")
     
     col1, col2 = st.columns(2)
     with col1:
@@ -269,11 +305,14 @@ with tab1:
         s_dur = st.number_input("Duration (sec)", value=3, key="s_dur")
         
     if uploaded_img and st.button("Generate Image Wobble"):
-        with st.spinner("Processing..."):
-            out_path = process_single_image(uploaded_img, s_fps, s_dur, s_intensity, s_scale)
-            st.video(out_path)
-            with open(out_path, 'rb') as f:
-                st.download_button("Download Video", f, file_name="wobble_image.mp4")
+        if use_2_layer and not uploaded_bg:
+            st.error("Please upload a background image for 2-layer mode.")
+        else:
+            with st.spinner("Processing..."):
+                out_path = process_single_image(uploaded_img, uploaded_bg, s_fps, s_dur, s_intensity, s_scale)
+                st.video(out_path)
+                with open(out_path, 'rb') as f:
+                    st.download_button("Download Video", f, file_name="wobble_image.mp4")
 
 with tab2:
     uploaded_vid = st.file_uploader("Upload Video", type=['mp4', 'mov', 'avi'])
