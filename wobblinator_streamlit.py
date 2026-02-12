@@ -10,7 +10,6 @@ import gc
 
 st.set_page_config(page_title="The Wobblinator", page_icon="〰️", layout="centered")
 
-# Visual limit feedback (Server limit enforced by config.toml)
 MAX_FILE_SIZE_MB = 100
 
 st.markdown("""
@@ -241,12 +240,16 @@ def process_single_image(image_file, background_file, fps, duration, intensity, 
             
             # Explicit cleanup to free memory in loop
             del frame
-            if i % 30 == 0:
+            # Force garbage collection every few frames to prevent OOM
+            if i % 15 == 0:
                 gc.collect()
                 
             progress_bar.progress((i + 1) / total_frames)
             
         out.release()
+        
+        # Immediate GC after loop
+        gc.collect()
         
         final_path = convert_to_h264(tfile_raw_path)
         
@@ -312,7 +315,8 @@ def process_video_file(video_file, out_fps, intensity, scale):
             
             # Explicit memory management inside loop
             del frame, distorted
-            if frame_count % 30 == 0:
+            # More frequent GC collection for video processing
+            if frame_count % 15 == 0:
                 gc.collect()
             
             frame_count += 1
@@ -321,6 +325,9 @@ def process_video_file(video_file, out_fps, intensity, scale):
                 
         out.release()
         cap.release()
+        
+        # Immediate GC after loop
+        gc.collect()
         
         final_path = convert_to_h264(tfile_raw_path)
         
