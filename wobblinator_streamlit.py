@@ -4,13 +4,147 @@ import numpy as np
 from PIL import Image
 import tempfile
 import os
+import subprocess
+import shutil
 
-# App Config
-st.set_page_config(page_title="The Wobblinator", page_icon="〰️")
-st.title("The Wobblinator 〰️")
-st.write("Squigglevision Generator for Da Web")
+# Config
+st.set_page_config(page_title="The Wobblinator", page_icon="〰️", layout="centered")
 
-# --- Core Logic ---
+# Theme CSS
+st.markdown("""
+<style>
+    /* Base Variables */
+    :root {
+        --bg-color: #0f0f13;
+        --glass-bg: rgba(255, 255, 255, 0.05);
+        --glass-border: rgba(255, 255, 255, 0.1);
+        --text-main: #ffffff;
+        --accent-color: #6366f1;
+    }
+
+    /* Global App Background */
+    .stApp {
+        background-color: var(--bg-color);
+        background-image: 
+            radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.1) 0%, transparent 40%),
+            radial-gradient(circle at 90% 80%, rgba(236, 72, 153, 0.1) 0%, transparent 40%);
+        color: var(--text-main);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    /* Glass Container for Main Content */
+    .block-container {
+        background: var(--glass-bg);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid var(--glass-border);
+        border-radius: 24px;
+        padding: 3rem !important;
+        margin-top: 2rem;
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.36);
+        max-width: 800px;
+    }
+
+    /* Remove Streamlit Default Elements */
+    header, footer, #MainMenu {visibility: hidden;}
+
+    /* Typography */
+    h1 {
+        font-weight: 300;
+        letter-spacing: 1px;
+        text-align: center;
+        text-shadow: 0 0 20px rgba(255,255,255,0.1);
+    }
+    h1 span {
+        font-weight: 700;
+        color: var(--accent-color);
+    }
+
+    /* Tabs Styling */
+    .stTabs [data-baseweb="tab-list"] {
+        background: transparent;
+        gap: 10px;
+        margin-bottom: 20px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: rgba(255,255,255,0.03);
+        border-radius: 12px;
+        border: 1px solid var(--glass-border);
+        color: #a1a1aa;
+        padding: 10px 20px;
+        transition: all 0.2s;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: var(--accent-color) !important;
+        color: white !important;
+        border-color: var(--accent-color);
+    }
+
+    /* Button Styling */
+    .stButton > button {
+        background: var(--glass-bg);
+        border: 1px solid var(--glass-border);
+        color: white;
+        border-radius: 16px;
+        padding: 0.75rem 1.5rem;
+        font-weight: 600;
+        transition: all 0.2s;
+        width: 100%;
+        backdrop-filter: blur(4px);
+    }
+    .stButton > button:hover {
+        background: rgba(255,255,255,0.1);
+        border-color: var(--accent-color);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+    }
+
+    /* Inputs & Sliders */
+    .stSlider > div > div > div > div { background-color: var(--accent-color); }
+    .stNumberInput input { color: white; background: rgba(0,0,0,0.2); border-radius: 8px; }
+    
+    /* File Uploader */
+    [data-testid="stFileUploader"] {
+        background: rgba(0,0,0,0.2);
+        border: 2px dashed var(--glass-border);
+        border-radius: 16px;
+        padding: 2rem;
+        transition: all 0.3s;
+    }
+    [data-testid="stFileUploader"]:hover {
+        border-color: rgba(255,255,255,0.4);
+        background: rgba(255,255,255,0.02);
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("<h1>The <span>Wobblinator</span></h1>", unsafe_allow_html=True)
+
+# --- FFmpeg Conversion ---
+def convert_to_h264(input_path):
+    output_path = tempfile.mktemp(suffix=".mp4")
+    
+    if shutil.which("ffmpeg") is None:
+        st.error("Error: FFmpeg not installed on server.")
+        return input_path
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-vcodec", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-acodec", "aac",
+        "-movflags", "+faststart",
+        output_path
+    ]
+    
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return output_path
+    except subprocess.CalledProcessError:
+        return input_path
+
+# --- Wobble Logic ---
 def generate_noise_map(w, h, wave_scale, intensity, map_x_base, map_y_base):
     safe_scale = max(5, wave_scale)
     grid_w = max(3, int(w / safe_scale))
@@ -27,29 +161,25 @@ def generate_noise_map(w, h, wave_scale, intensity, map_x_base, map_y_base):
     return map_x, map_y
 
 def process_single_image(image_file, fps, duration, intensity, scale):
-    # Decode upload
+    # Load
     file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
     fg_cv_image = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
     
     h, w = fg_cv_image.shape[:2]
     total_frames = int(fps * duration)
     
-    # Calculate wobble frequency (target ~12fps)
-    updates_per_sec = 12
-    frames_per_update = max(1, int(fps / updates_per_sec))
+    # Timing
+    frames_per_update = max(1, int(fps / 12))
     
+    # Maps
     map_x_base, map_y_base = np.meshgrid(np.arange(w), np.arange(h))
     map_x_base = map_x_base.astype(np.float32)
     map_y_base = map_y_base.astype(np.float32)
     
-    # Video Writer Setup
-    tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-    fourcc = cv2.VideoWriter_fourcc(*'avc1') 
-    out = cv2.VideoWriter(tfile.name, fourcc, fps, (w, h))
-    
-    if not out.isOpened():
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(tfile.name, fourcc, fps, (w, h))
+    # Temp Write
+    tfile_raw = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
+    out = cv2.VideoWriter(tfile_raw.name, fourcc, fps, (w, h))
 
     progress_bar = st.progress(0)
     current_map_x, current_map_y = None, None
@@ -63,24 +193,24 @@ def process_single_image(image_file, fps, duration, intensity, scale):
                           borderMode=cv2.BORDER_CONSTANT, 
                           borderValue=(0,0,0,0))
         
-        # Composite transparent images on white
+        # Alpha Composite
         if frame.shape[2] == 4:
             b,g,r,a = cv2.split(frame)
-            overlay_color = cv2.merge((b,g,r))
+            overlay = cv2.merge((b,g,r))
             mask = a / 255.0
-            bg = np.ones_like(overlay_color, dtype=np.uint8) * 255
+            bg = np.ones_like(overlay, dtype=np.uint8) * 255
             for c in range(3):
-                bg[:,:,c] = bg[:,:,c] * (1 - mask) + overlay_color[:,:,c] * mask
+                bg[:,:,c] = bg[:,:,c] * (1 - mask) + overlay[:,:,c] * mask
             frame = bg
 
         out.write(frame)
         progress_bar.progress((i + 1) / total_frames)
         
     out.release()
-    return tfile.name
+    return convert_to_h264(tfile_raw.name)
 
 def process_video_file(video_file, out_fps, intensity, scale):
-    # Save upload to temp for OpenCV
+    # Save Input
     tfile_in = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
     tfile_in.write(video_file.read())
     
@@ -89,17 +219,12 @@ def process_video_file(video_file, out_fps, intensity, scale):
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    tfile_out = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-    fourcc = cv2.VideoWriter_fourcc(*'avc1')
-    out = cv2.VideoWriter(tfile_out.name, fourcc, out_fps, (w, h))
-    
-    if not out.isOpened():
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(tfile_out.name, fourcc, out_fps, (w, h))
+    # Temp Write
+    tfile_raw = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(tfile_raw.name, fourcc, out_fps, (w, h))
 
-    # Calculate wobble frequency
-    updates_per_sec = 12
-    frames_per_update = max(1, int(out_fps / updates_per_sec))
+    frames_per_update = max(1, int(out_fps / 12))
     
     map_x_base, map_y_base = np.meshgrid(np.arange(w), np.arange(h))
     map_x_base = map_x_base.astype(np.float32)
@@ -116,11 +241,10 @@ def process_video_file(video_file, out_fps, intensity, scale):
         if frame_count % frames_per_update == 0 or current_map_x is None:
              current_map_x, current_map_y = generate_noise_map(w, h, scale, intensity, map_x_base, map_y_base)
              
-        # Replicate borders to fill gaps
-        distorted_frame = cv2.remap(frame, current_map_x, current_map_y, 
-                                  interpolation=cv2.INTER_LINEAR, 
-                                  borderMode=cv2.BORDER_REPLICATE)
-        out.write(distorted_frame)
+        distorted = cv2.remap(frame, current_map_x, current_map_y, 
+                              interpolation=cv2.INTER_LINEAR, 
+                              borderMode=cv2.BORDER_REPLICATE)
+        out.write(distorted)
         
         frame_count += 1
         if total_frames > 0:
@@ -128,13 +252,12 @@ def process_video_file(video_file, out_fps, intensity, scale):
             
     cap.release()
     out.release()
-    return tfile_out.name
+    return convert_to_h264(tfile_raw.name)
 
-# --- UI Layout ---
+# --- Layout ---
 tab1, tab2 = st.tabs(["Single Image", "Video Import"])
 
 with tab1:
-    st.header("Single Image Animation")
     uploaded_img = st.file_uploader("Upload Image", type=['png', 'jpg', 'jpeg'])
     
     col1, col2 = st.columns(2)
@@ -153,7 +276,6 @@ with tab1:
                 st.download_button("Download Video", f, file_name="wobble_image.mp4")
 
 with tab2:
-    st.header("Video Animation")
     uploaded_vid = st.file_uploader("Upload Video", type=['mp4', 'mov', 'avi'])
     
     col3, col4 = st.columns(2)
