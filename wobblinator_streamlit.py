@@ -166,14 +166,15 @@ def convert_to_h264(input_path):
 def resize_if_needed(image, max_dim=MAX_DIMENSION):
     h, w = image.shape[:2]
     if max(h, w) > max_dim:
-        scale = max_dim / max(h, w)
-        new_w = int(w * scale)
-        new_h = int(h * scale)
-        return cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    return image
+        scale_factor = max_dim / max(h, w)
+        new_w = int(w * scale_factor)
+        new_h = int(h * scale_factor)
+        return cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA), scale_factor
+    return image, 1.0
 
 def generate_noise_map(w, h, wave_scale, intensity, map_x_base, map_y_base):
-    safe_scale = max(5, wave_scale)
+    # Ensure minimum scale prevents grid collapse on small images
+    safe_scale = max(2, wave_scale)
     grid_w = max(3, int(w / safe_scale))
     grid_h = max(3, int(h / safe_scale))
     
@@ -195,15 +196,19 @@ def process_single_image(image_file, background_file, fps, duration, intensity, 
         file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
         fg_cv_image = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
         
-        # Resize immediately to save memory
-        fg_cv_image = resize_if_needed(fg_cv_image)
+        # Resize and get the ratio to adjust physics
+        fg_cv_image, ratio = resize_if_needed(fg_cv_image)
         h, w = fg_cv_image.shape[:2]
+        
+        # Adjust params to match visual appearance of original resolution
+        eff_intensity = max(0.5, intensity * ratio)
+        eff_scale = max(2, scale * ratio)
         
         bg_cv_image = None
         if background_file:
             bg_bytes = np.asarray(bytearray(background_file.read()), dtype=np.uint8)
             bg_raw = cv2.imdecode(bg_bytes, cv2.IMREAD_UNCHANGED)
-            bg_cv_image = cv2.resize(bg_raw, (w, h)) # Force match FG size
+            bg_cv_image = cv2.resize(bg_raw, (w, h))
             if len(bg_cv_image.shape) == 3 and bg_cv_image.shape[2] == 4:
                 bg_cv_image = cv2.cvtColor(bg_cv_image, cv2.COLOR_BGRA2BGR)
             elif len(bg_cv_image.shape) == 2:
@@ -228,7 +233,7 @@ def process_single_image(image_file, background_file, fps, duration, intensity, 
 
         for i in range(total_frames):
             if i % frames_per_update == 0 or current_map_x is None:
-                current_map_x, current_map_y = generate_noise_map(w, h, scale, intensity, map_x_base, map_y_base)
+                current_map_x, current_map_y = generate_noise_map(w, h, eff_scale, eff_intensity, map_x_base, map_y_base)
                 
             frame = cv2.remap(fg_cv_image, current_map_x, current_map_y, 
                               interpolation=cv2.INTER_LINEAR, 
@@ -292,7 +297,6 @@ def process_video_file(video_file, out_fps, intensity, scale):
         h_orig = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
-        # Calculate resize target if too big
         scale_factor = 1.0
         if max(w_orig, h_orig) > MAX_DIMENSION:
             scale_factor = MAX_DIMENSION / max(w_orig, h_orig)
@@ -300,6 +304,10 @@ def process_video_file(video_file, out_fps, intensity, scale):
             h = int(h_orig * scale_factor)
         else:
             w, h = w_orig, h_orig
+            
+        # Adjust params based on resize ratio
+        eff_intensity = max(0.5, intensity * scale_factor)
+        eff_scale = max(2, scale * scale_factor)
         
         tfile_raw = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
         tfile_raw_path = tfile_raw.name
@@ -322,12 +330,11 @@ def process_video_file(video_file, out_fps, intensity, scale):
             ret, frame = cap.read()
             if not ret: break
             
-            # Resize frame if needed
             if scale_factor < 1.0:
                 frame = cv2.resize(frame, (w, h), interpolation=cv2.INTER_AREA)
             
             if frame_count % frames_per_update == 0 or current_map_x is None:
-                 current_map_x, current_map_y = generate_noise_map(w, h, scale, intensity, map_x_base, map_y_base)
+                 current_map_x, current_map_y = generate_noise_map(w, h, eff_scale, eff_intensity, map_x_base, map_y_base)
                  
             distorted = cv2.remap(frame, current_map_x, current_map_y, 
                                   interpolation=cv2.INTER_LINEAR, 
@@ -416,4 +423,3 @@ with tab2:
                 if video_bytes:
                     st.video(video_bytes)
                     st.download_button("Download Video", data=video_bytes, file_name="wobble_video.mp4", mime="video/mp4")
-
