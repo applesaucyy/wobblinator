@@ -6,9 +6,11 @@ import tempfile
 import os
 import subprocess
 import shutil
+import gc
 
 st.set_page_config(page_title="The Wobblinator", page_icon="〰️", layout="centered")
 
+# Visual limit feedback (Server limit enforced by config.toml)
 MAX_FILE_SIZE_MB = 100
 
 st.markdown("""
@@ -59,7 +61,6 @@ st.markdown("""
         background: transparent;
         gap: 10px;
         margin-bottom: 20px;
-        justify-content: center;
     }
     .stTabs [data-baseweb="tab"] {
         background-color: rgba(255,255,255,0.03);
@@ -133,6 +134,7 @@ def cleanup_files(*filepaths):
                 pass
 
 def check_file_size(file):
+    # Secondary check in Python (Config handles server rejection)
     if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
         st.error(f"File too large. Please keep uploads under {MAX_FILE_SIZE_MB}MB to prevent crashes.")
         return False
@@ -236,6 +238,12 @@ def process_single_image(image_file, background_file, fps, duration, intensity, 
                 frame = (base * (1.0 - mask_3d) + overlay * mask_3d).astype(np.uint8)
 
             out.write(frame)
+            
+            # Explicit cleanup to free memory in loop
+            del frame
+            if i % 30 == 0:
+                gc.collect()
+                
             progress_bar.progress((i + 1) / total_frames)
             
         out.release()
@@ -249,6 +257,7 @@ def process_single_image(image_file, background_file, fps, duration, intensity, 
         
     finally:
         cleanup_files(tfile_raw_path, final_path)
+        gc.collect()
 
 def process_video_file(video_file, out_fps, intensity, scale):
     tfile_in_path = None
@@ -301,6 +310,11 @@ def process_video_file(video_file, out_fps, intensity, scale):
                                   borderMode=cv2.BORDER_REPLICATE)
             out.write(distorted)
             
+            # Explicit memory management inside loop
+            del frame, distorted
+            if frame_count % 30 == 0:
+                gc.collect()
+            
             frame_count += 1
             if total_frames > 0:
                 progress_bar.progress(min(frame_count / total_frames, 1.0))
@@ -319,6 +333,7 @@ def process_video_file(video_file, out_fps, intensity, scale):
         if cap and cap.isOpened(): cap.release()
         if out and out.isOpened(): out.release()
         cleanup_files(tfile_in_path, tfile_raw_path, final_path)
+        gc.collect()
 
 tab1, tab2 = st.tabs(["Single Image", "Video Import"])
 
@@ -377,4 +392,3 @@ with tab2:
                 if video_bytes:
                     st.video(video_bytes)
                     st.download_button("Download Video", data=video_bytes, file_name="wobble_video.mp4", mime="video/mp4")
-
