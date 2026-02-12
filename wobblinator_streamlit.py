@@ -59,6 +59,7 @@ st.markdown("""
         background: transparent;
         gap: 10px;
         margin-bottom: 20px;
+        justify-content: center;
     }
     .stTabs [data-baseweb="tab"] {
         background-color: rgba(255,255,255,0.03);
@@ -376,3 +377,4 @@ with tab2:
                 if video_bytes:
                     st.video(video_bytes)
                     st.download_button("Download Video", data=video_bytes, file_name="wobble_video.mp4", mime="video/mp4")
+
