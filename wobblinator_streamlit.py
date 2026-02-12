@@ -237,8 +237,7 @@ def process_single_image(image_file, background_file, fps, duration, intensity, 
                 
             frame = cv2.remap(fg_cv_image, current_map_x, current_map_y, 
                               interpolation=cv2.INTER_LINEAR, 
-                              borderMode=cv2.BORDER_CONSTANT, 
-                              borderValue=(0,0,0,0))
+                              borderMode=cv2.BORDER_REPLICATE)
             
             if frame.shape[2] == 4:
                 b,g,r,a = cv2.split(frame)
