@@ -11,6 +11,7 @@ import gc
 st.set_page_config(page_title="The Wobblinator", page_icon="〰️", layout="centered")
 
 MAX_FILE_SIZE_MB = 100
+MAX_DIMENSION = 720
 
 st.markdown("""
 <style>
@@ -133,7 +134,6 @@ def cleanup_files(*filepaths):
                 pass
 
 def check_file_size(file):
-    # Secondary check in Python (Config handles server rejection)
     if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
         st.error(f"File too large. Please keep uploads under {MAX_FILE_SIZE_MB}MB to prevent crashes.")
         return False
@@ -163,6 +163,15 @@ def convert_to_h264(input_path):
     except subprocess.CalledProcessError:
         return input_path
 
+def resize_if_needed(image, max_dim=MAX_DIMENSION):
+    h, w = image.shape[:2]
+    if max(h, w) > max_dim:
+        scale = max_dim / max(h, w)
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        return cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    return image
+
 def generate_noise_map(w, h, wave_scale, intensity, map_x_base, map_y_base):
     safe_scale = max(5, wave_scale)
     grid_w = max(3, int(w / safe_scale))
@@ -185,13 +194,16 @@ def process_single_image(image_file, background_file, fps, duration, intensity, 
     try:
         file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
         fg_cv_image = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
+        
+        # Resize immediately to save memory
+        fg_cv_image = resize_if_needed(fg_cv_image)
         h, w = fg_cv_image.shape[:2]
         
         bg_cv_image = None
         if background_file:
             bg_bytes = np.asarray(bytearray(background_file.read()), dtype=np.uint8)
             bg_raw = cv2.imdecode(bg_bytes, cv2.IMREAD_UNCHANGED)
-            bg_cv_image = cv2.resize(bg_raw, (w, h))
+            bg_cv_image = cv2.resize(bg_raw, (w, h)) # Force match FG size
             if len(bg_cv_image.shape) == 3 and bg_cv_image.shape[2] == 4:
                 bg_cv_image = cv2.cvtColor(bg_cv_image, cv2.COLOR_BGRA2BGR)
             elif len(bg_cv_image.shape) == 2:
@@ -238,17 +250,13 @@ def process_single_image(image_file, background_file, fps, duration, intensity, 
 
             out.write(frame)
             
-            # Explicit cleanup to free memory in loop
             del frame
-            # Force garbage collection every few frames to prevent OOM
-            if i % 15 == 0:
+            if i % 10 == 0:
                 gc.collect()
                 
             progress_bar.progress((i + 1) / total_frames)
             
         out.release()
-        
-        # Immediate GC after loop
         gc.collect()
         
         final_path = convert_to_h264(tfile_raw_path)
@@ -280,9 +288,18 @@ def process_video_file(video_file, out_fps, intensity, scale):
             st.error("Error reading video file.")
             return None
             
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        w_orig = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h_orig = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        # Calculate resize target if too big
+        scale_factor = 1.0
+        if max(w_orig, h_orig) > MAX_DIMENSION:
+            scale_factor = MAX_DIMENSION / max(w_orig, h_orig)
+            w = int(w_orig * scale_factor)
+            h = int(h_orig * scale_factor)
+        else:
+            w, h = w_orig, h_orig
         
         tfile_raw = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
         tfile_raw_path = tfile_raw.name
@@ -305,6 +322,10 @@ def process_video_file(video_file, out_fps, intensity, scale):
             ret, frame = cap.read()
             if not ret: break
             
+            # Resize frame if needed
+            if scale_factor < 1.0:
+                frame = cv2.resize(frame, (w, h), interpolation=cv2.INTER_AREA)
+            
             if frame_count % frames_per_update == 0 or current_map_x is None:
                  current_map_x, current_map_y = generate_noise_map(w, h, scale, intensity, map_x_base, map_y_base)
                  
@@ -313,10 +334,8 @@ def process_video_file(video_file, out_fps, intensity, scale):
                                   borderMode=cv2.BORDER_REPLICATE)
             out.write(distorted)
             
-            # Explicit memory management inside loop
             del frame, distorted
-            # More frequent GC collection for video processing
-            if frame_count % 15 == 0:
+            if frame_count % 10 == 0:
                 gc.collect()
             
             frame_count += 1
@@ -325,8 +344,6 @@ def process_video_file(video_file, out_fps, intensity, scale):
                 
         out.release()
         cap.release()
-        
-        # Immediate GC after loop
         gc.collect()
         
         final_path = convert_to_h264(tfile_raw_path)
