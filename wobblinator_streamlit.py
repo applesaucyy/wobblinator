@@ -298,8 +298,8 @@ with tab1:
     
     col1, col2 = st.columns(2)
     with col1:
-        s_intensity = st.slider("Wobble Intensity", 1, 20, 1, key="s_int")
-        s_fps = st.number_input("FPS", value=24, key="s_fps")
+        s_intensity = st.slider("Wobblemeat Intensity", 1, 20, 1, key="s_int")
+        s_fps = st.number_input("FPS", value=12, key="s_fps")
     with col2:
         s_scale = st.slider("Wave Scale", 5, 100, 20, key="s_sc")
         s_dur = st.number_input("Duration (sec)", value=3, key="s_dur")
@@ -319,7 +319,7 @@ with tab2:
     
     col3, col4 = st.columns(2)
     with col3:
-        v_intensity = st.slider("Wobble Intensity", 1, 20, 1, key="v_int")
+        v_intensity = st.slider("Wobblemeat Intensity", 1, 20, 1, key="v_int")
     with col4:
         v_scale = st.slider("Wave Scale", 5, 100, 20, key="v_sc")
         v_fps = st.number_input("Output FPS", value=24, key="v_fps")
@@ -330,3 +330,4 @@ with tab2:
             st.video(out_path)
             with open(out_path, 'rb') as f:
                 st.download_button("Download Video", f, file_name="wobble_video.mp4")
+
