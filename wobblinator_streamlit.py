@@ -128,6 +128,7 @@ st.markdown("<h1>The <span>Wobblinator</span></h1>", unsafe_allow_html=True)
 
 # --- FFmpeg Conversion ---
 def convert_to_h264(input_path):
+    # mktemp is deprecated but useful here for generating a path string before creation
     output_path = tempfile.mktemp(suffix=".mp4")
     
     if shutil.which("ffmpeg") is None:
@@ -150,6 +151,15 @@ def convert_to_h264(input_path):
     except subprocess.CalledProcessError:
         return input_path
 
+def cleanup_files(*filepaths):
+    """Utility to silently remove temp files and free up disk space."""
+    for path in filepaths:
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except:
+                pass
+
 # --- Wobble Logic ---
 def generate_noise_map(w, h, wave_scale, intensity, map_x_base, map_y_base):
     safe_scale = max(5, wave_scale)
@@ -167,20 +177,15 @@ def generate_noise_map(w, h, wave_scale, intensity, map_x_base, map_y_base):
     return map_x, map_y
 
 def process_single_image(image_file, background_file, fps, duration, intensity, scale):
-    # Load FG
     file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
     fg_cv_image = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
-    
     h, w = fg_cv_image.shape[:2]
     
-    # Load BG (if present)
     bg_cv_image = None
     if background_file:
         bg_bytes = np.asarray(bytearray(background_file.read()), dtype=np.uint8)
         bg_raw = cv2.imdecode(bg_bytes, cv2.IMREAD_UNCHANGED)
-        # Resize to match FG
         bg_cv_image = cv2.resize(bg_raw, (w, h))
-        # Drop alpha from BG if present
         if len(bg_cv_image.shape) == 3 and bg_cv_image.shape[2] == 4:
             bg_cv_image = cv2.cvtColor(bg_cv_image, cv2.COLOR_BGRA2BGR)
         elif len(bg_cv_image.shape) == 2:
@@ -189,12 +194,10 @@ def process_single_image(image_file, background_file, fps, duration, intensity, 
     total_frames = int(fps * duration)
     frames_per_update = max(1, int(fps / 12))
     
-    # Maps
     map_x_base, map_y_base = np.meshgrid(np.arange(w), np.arange(h))
     map_x_base = map_x_base.astype(np.float32)
     map_y_base = map_y_base.astype(np.float32)
     
-    # Temp Write
     tfile_raw = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
     fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
     out = cv2.VideoWriter(tfile_raw.name, fourcc, fps, (w, h))
@@ -211,19 +214,16 @@ def process_single_image(image_file, background_file, fps, duration, intensity, 
                           borderMode=cv2.BORDER_CONSTANT, 
                           borderValue=(0,0,0,0))
         
-        # Composite
         if frame.shape[2] == 4:
             b,g,r,a = cv2.split(frame)
             overlay = cv2.merge((b,g,r))
             mask = a / 255.0
             
-            # Use BG image if exists, else White
             if bg_cv_image is not None:
                 base = bg_cv_image
             else:
                 base = np.ones_like(overlay, dtype=np.uint8) * 255
             
-            # Vectorized Blend
             mask_3d = np.dstack([mask]*3)
             frame = (base * (1.0 - mask_3d) + overlay * mask_3d).astype(np.uint8)
 
@@ -231,19 +231,28 @@ def process_single_image(image_file, background_file, fps, duration, intensity, 
         progress_bar.progress((i + 1) / total_frames)
         
     out.release()
-    return convert_to_h264(tfile_raw.name)
+    
+    # Process with FFmpeg
+    final_path = convert_to_h264(tfile_raw.name)
+    
+    # Read final video into memory and clean up all temp files immediately
+    with open(final_path, 'rb') as f:
+        video_bytes = f.read()
+        
+    cleanup_files(tfile_raw.name, final_path)
+    return video_bytes
 
 def process_video_file(video_file, out_fps, intensity, scale):
-    # Save Input
     tfile_in = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-    tfile_in.write(video_file.read())
+    # Using getbuffer() is more memory efficient than .read() for large files
+    tfile_in.write(video_file.getbuffer())
+    tfile_in.close() # Close to ensure it flushes to disk
     
     cap = cv2.VideoCapture(tfile_in.name)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    # Temp Write
     tfile_raw = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(tfile_raw.name, fourcc, out_fps, (w, h))
@@ -276,7 +285,16 @@ def process_video_file(video_file, out_fps, intensity, scale):
             
     cap.release()
     out.release()
-    return convert_to_h264(tfile_raw.name)
+    
+    # Process with FFmpeg
+    final_path = convert_to_h264(tfile_raw.name)
+    
+    # Read final video into memory and clean up all temp files immediately
+    with open(final_path, 'rb') as f:
+        video_bytes = f.read()
+        
+    cleanup_files(tfile_in.name, tfile_raw.name, final_path)
+    return video_bytes
 
 # --- Layout ---
 tab1, tab2 = st.tabs(["Single Image", "Video Import"])
@@ -309,10 +327,9 @@ with tab1:
             st.error("Please upload a background image for 2-layer mode.")
         else:
             with st.spinner("Processing..."):
-                out_path = process_single_image(uploaded_img, uploaded_bg, s_fps, s_dur, s_intensity, s_scale)
-                st.video(out_path)
-                with open(out_path, 'rb') as f:
-                    st.download_button("Download Video", f, file_name="wobble_image.mp4")
+                video_bytes = process_single_image(uploaded_img, uploaded_bg, s_fps, s_dur, s_intensity, s_scale)
+                st.video(video_bytes)
+                st.download_button("Download Video", data=video_bytes, file_name="wobble_image.mp4", mime="video/mp4")
 
 with tab2:
     uploaded_vid = st.file_uploader("Upload Video", type=['mp4', 'mov', 'avi'])
@@ -326,8 +343,6 @@ with tab2:
         
     if uploaded_vid and st.button("Generate Video Wobble"):
         with st.spinner("Processing..."):
-            out_path = process_video_file(uploaded_vid, v_fps, v_intensity, v_scale)
-            st.video(out_path)
-            with open(out_path, 'rb') as f:
-                st.download_button("Download Video", f, file_name="wobble_video.mp4")
-
+            video_bytes = process_video_file(uploaded_vid, v_fps, v_intensity, v_scale)
+            st.video(video_bytes)
+            st.download_button("Download Video", data=video_bytes, file_name="wobble_video.mp4", mime="video/mp4")
