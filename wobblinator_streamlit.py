@@ -11,7 +11,7 @@ import gc
 st.set_page_config(page_title="The Wobblinator", page_icon="〰️", layout="centered")
 
 MAX_FILE_SIZE_MB = 100
-MAX_DIMENSION = 720
+MAX_DIMENSION = 1080
 
 st.markdown("""
 <style>
@@ -416,3 +416,4 @@ with tab2:
                 if video_bytes:
                     st.video(video_bytes)
                     st.download_button("Download Video", data=video_bytes, file_name="wobble_video.mp4", mime="video/mp4")
+
