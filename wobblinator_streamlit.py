@@ -1,11 +1,16 @@
+import os
+# Suppress OpenCV and FFmpeg console warnings/errors before cv2 is loaded
+os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
+os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "-8"
+
 import streamlit as st
 import cv2
 import numpy as np
 from PIL import Image
 import tempfile
-import os
 import zipfile
 import shutil
+import gc
 
 # App Config
 st.set_page_config(page_title="The Wobblinator v4.2", layout="centered")
@@ -13,6 +18,13 @@ st.title("The Wobblinator v4.2")
 st.write("Squigglevision Generator for Da Web")
 
 # --- Core Logic ---
+def get_capped_dimensions(w, h, max_dim=1920):
+    """Caps resolution at 1080p (1920x1080 max) to save memory."""
+    if max(w, h) > max_dim:
+        ratio = max_dim / float(max(w, h))
+        return int(w * ratio), int(h * ratio)
+    return w, h
+
 def generate_noise_map(w, h, wave_scale, intensity, map_x_base, map_y_base):
     safe_scale = max(5, wave_scale)
     grid_w = max(3, int(w / safe_scale))
@@ -40,47 +52,13 @@ def composite_on_white(cv_img):
     else:
         return cv2.cvtColor(cv_img, cv2.COLOR_GRAY2BGR)
 
-def export_frames(frames, fps, fmt, w, h):
-    """Handles exporting the generated frames into the requested format."""
-    if fmt == "MP4 Video":
-        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        fourcc = cv2.VideoWriter_fourcc(*'avc1') 
-        out = cv2.VideoWriter(tfile.name, fourcc, fps, (w, h))
-        if not out.isOpened():
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(tfile.name, fourcc, fps, (w, h))
-            
-        for frame in frames:
-            out.write(frame)
-        out.release()
-        return tfile.name, "video/mp4", "wobbled.mp4"
-        
-    elif fmt == "GIF Animation":
-        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.gif')
-        pil_frames = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in frames]
-        pil_frames[0].save(tfile.name, save_all=True, append_images=pil_frames[1:], duration=int(1000/fps), loop=0)
-        return tfile.name, "image/gif", "wobbled.gif"
-        
-    elif fmt == "PNG Sequence (ZIP)":
-        temp_dir = tempfile.mkdtemp()
-        for i, frame in enumerate(frames):
-            cv2.imwrite(os.path.join(temp_dir, f"image_{i+1:04d}.png"), frame)
-            
-        zip_base = tempfile.NamedTemporaryFile(delete=False).name
-        shutil.make_archive(zip_base, 'zip', temp_dir)
-        shutil.rmtree(temp_dir) # Cleanup raw images
-        return f"{zip_base}.zip", "application/zip", "wobbled_sequence.zip"
-
 def generate_quick_preview(cv_img, intensity, scale):
     """Generates a 2-second 12FPS preview GIF of the current settings."""
     h, w = cv_img.shape[:2]
     
-    # Scale down preview if the image is extremely large to save computation time
-    max_dim = 600
-    if max(h, w) > max_dim:
-        ratio = max_dim / max(h, w)
-        w, h = int(w * ratio), int(h * ratio)
-        cv_img = cv2.resize(cv_img, (w, h))
+    # Scale down preview drastically to save computation time and memory
+    w, h = get_capped_dimensions(w, h, max_dim=600)
+    cv_img = cv2.resize(cv_img, (w, h), interpolation=cv2.INTER_AREA)
         
     fps = 12
     total_frames = fps * 2 # 2 Seconds of wobble
@@ -100,6 +78,11 @@ def generate_quick_preview(cv_img, intensity, scale):
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.gif')
     pil_frames = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in frames]
     pil_frames[0].save(tfile.name, save_all=True, append_images=pil_frames[1:], duration=int(1000/fps), loop=0)
+    
+    # Cleanup memory
+    del frames, pil_frames, map_x_base, map_y_base
+    gc.collect()
+    
     return tfile.name
 
 def get_first_frame(source_type, source_data):
@@ -128,7 +111,12 @@ def process_single_image(image_file, fps, duration, intensity, scale, export_fmt
     file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
     fg_cv_image = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
     
-    h, w = fg_cv_image.shape[:2]
+    native_h, native_w = fg_cv_image.shape[:2]
+    w, h = get_capped_dimensions(native_w, native_h, max_dim=1920)
+    
+    if (w, h) != (native_w, native_h):
+        fg_cv_image = cv2.resize(fg_cv_image, (w, h), interpolation=cv2.INTER_AREA)
+        
     total_frames = int(fps * duration)
     
     updates_per_sec = 12
@@ -140,7 +128,22 @@ def process_single_image(image_file, fps, duration, intensity, scale, export_fmt
 
     progress_bar = st.progress(0)
     current_map_x, current_map_y = None, None
-    processed_frames = []
+    
+    # Initialize Exporters Direct-to-Disk to save RAM
+    out_video = None
+    gif_frames = []
+    temp_dir = None
+    
+    if export_fmt == "MP4 Video":
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+        fourcc = cv2.VideoWriter_fourcc(*'avc1') 
+        out_video = cv2.VideoWriter(tfile.name, cv2.CAP_FFMPEG, fourcc, fps, (w, h))
+        if not out_video.isOpened():
+            out_video = cv2.VideoWriter(tfile.name, cv2.CAP_FFMPEG, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+    elif export_fmt == "GIF Animation":
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.gif')
+    elif export_fmt == "PNG Sequence (ZIP)":
+        temp_dir = tempfile.mkdtemp()
 
     for i in range(total_frames):
         if i % frames_per_update == 0 or current_map_x is None:
@@ -151,33 +154,64 @@ def process_single_image(image_file, fps, duration, intensity, scale, export_fmt
                           borderMode=cv2.BORDER_REPLICATE)
         
         frame = composite_on_white(frame)
-        processed_frames.append(frame)
+        
+        # Write directly to disk or append (for GIF)
+        if export_fmt == "MP4 Video":
+            out_video.write(frame)
+        elif export_fmt == "GIF Animation":
+            gif_frames.append(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+        elif export_fmt == "PNG Sequence (ZIP)":
+            cv2.imwrite(os.path.join(temp_dir, f"image_{i+1:04d}.png"), frame)
+            
         progress_bar.progress((i + 1) / total_frames)
         
-    return export_frames(processed_frames, fps, export_fmt, w, h)
+    # Finalize Exporters
+    if export_fmt == "MP4 Video":
+        out_video.release()
+        output_file, mime, dl_name = tfile.name, "video/mp4", "wobbled.mp4"
+    elif export_fmt == "GIF Animation":
+        gif_frames[0].save(tfile.name, save_all=True, append_images=gif_frames[1:], duration=int(1000/fps), loop=0)
+        output_file, mime, dl_name = tfile.name, "image/gif", "wobbled.gif"
+    elif export_fmt == "PNG Sequence (ZIP)":
+        zip_base = tempfile.NamedTemporaryFile(delete=False).name
+        shutil.make_archive(zip_base, 'zip', temp_dir)
+        shutil.rmtree(temp_dir)
+        output_file, mime, dl_name = f"{zip_base}.zip", "application/zip", "wobbled_sequence.zip"
+        
+    # Cleanup memory
+    del fg_cv_image, map_x_base, map_y_base, current_map_x, current_map_y
+    gc.collect()
+        
+    return output_file, mime, dl_name
 
 def process_animation(source_type, source_data, out_fps, intensity, scale, export_fmt):
-    processed_frames = []
     cap = None
     gif_img = None
+    
+    native_w, native_h = 0, 0
+    total_frames = 0
     
     if source_type == "video":
         tfile_in = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
         tfile_in.write(source_data.read())
         cap = cv2.VideoCapture(tfile_in.name)
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        native_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        native_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     elif source_type == "gif":
         gif_img = Image.open(source_data)
         total_frames = gif_img.n_frames
-        w, h = gif_img.size
+        native_w, native_h = gif_img.size
     elif source_type == "sequence":
         source_data = sorted(source_data, key=lambda x: x.name)
         total_frames = len(source_data)
         first_frame = cv2.imdecode(np.asarray(bytearray(source_data[0].read()), dtype=np.uint8), cv2.IMREAD_UNCHANGED)
-        h, w = first_frame.shape[:2]
+        native_h, native_w = first_frame.shape[:2]
         source_data[0].seek(0)
+        del first_frame
+
+    # Cap Output Dimensions
+    w, h = get_capped_dimensions(native_w, native_h, max_dim=1920)
 
     updates_per_sec = 12
     frames_per_update = max(1, int(out_fps / updates_per_sec))
@@ -187,6 +221,22 @@ def process_animation(source_type, source_data, out_fps, intensity, scale, expor
     
     current_map_x, current_map_y = None, None
     progress_bar = st.progress(0)
+    
+    # Initialize Exporters Direct-to-Disk to save RAM
+    out_video = None
+    gif_frames = []
+    temp_dir = None
+    
+    if export_fmt == "MP4 Video":
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+        fourcc = cv2.VideoWriter_fourcc(*'avc1') 
+        out_video = cv2.VideoWriter(tfile.name, cv2.CAP_FFMPEG, fourcc, out_fps, (w, h))
+        if not out_video.isOpened():
+            out_video = cv2.VideoWriter(tfile.name, cv2.CAP_FFMPEG, cv2.VideoWriter_fourcc(*'mp4v'), out_fps, (w, h))
+    elif export_fmt == "GIF Animation":
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.gif')
+    elif export_fmt == "PNG Sequence (ZIP)":
+        temp_dir = tempfile.mkdtemp()
     
     for frame_count in range(total_frames):
         frame = None
@@ -203,9 +253,12 @@ def process_animation(source_type, source_data, out_fps, intensity, scale, expor
             file_bytes = np.asarray(bytearray(source_data[frame_count].read()), dtype=np.uint8)
             frame = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
             if frame is None: break
-            if frame.shape[:2] != (h, w):
-                frame = cv2.resize(frame, (w, h))
-            frame = composite_on_white(frame)
+            
+        # Ensure frame matches capped dimensions
+        if frame.shape[:2] != (h, w):
+            frame = cv2.resize(frame, (w, h), interpolation=cv2.INTER_AREA)
+            
+        frame = composite_on_white(frame)
 
         if frame_count % frames_per_update == 0 or current_map_x is None:
              current_map_x, current_map_y = generate_noise_map(w, h, scale, intensity, map_x_base, map_y_base)
@@ -213,13 +266,38 @@ def process_animation(source_type, source_data, out_fps, intensity, scale, expor
         distorted_frame = cv2.remap(frame, current_map_x, current_map_y, 
                                   interpolation=cv2.INTER_LINEAR, 
                                   borderMode=cv2.BORDER_REPLICATE)
-        processed_frames.append(distorted_frame)
+                                  
+        # Write directly to disk or append (for GIF)
+        if export_fmt == "MP4 Video":
+            out_video.write(distorted_frame)
+        elif export_fmt == "GIF Animation":
+            gif_frames.append(Image.fromarray(cv2.cvtColor(distorted_frame, cv2.COLOR_BGR2RGB)))
+        elif export_fmt == "PNG Sequence (ZIP)":
+            cv2.imwrite(os.path.join(temp_dir, f"image_{frame_count+1:04d}.png"), distorted_frame)
         
         if total_frames > 0:
             progress_bar.progress(min((frame_count + 1) / total_frames, 1.0))
             
     if cap: cap.release()
-    return export_frames(processed_frames, out_fps, export_fmt, w, h)
+    
+    # Finalize Exporters
+    if export_fmt == "MP4 Video":
+        out_video.release()
+        output_file, mime, dl_name = tfile.name, "video/mp4", "wobbled_animation.mp4"
+    elif export_fmt == "GIF Animation":
+        gif_frames[0].save(tfile.name, save_all=True, append_images=gif_frames[1:], duration=int(1000/out_fps), loop=0)
+        output_file, mime, dl_name = tfile.name, "image/gif", "wobbled_animation.gif"
+    elif export_fmt == "PNG Sequence (ZIP)":
+        zip_base = tempfile.NamedTemporaryFile(delete=False).name
+        shutil.make_archive(zip_base, 'zip', temp_dir)
+        shutil.rmtree(temp_dir)
+        output_file, mime, dl_name = f"{zip_base}.zip", "application/zip", "wobbled_animation.zip"
+
+    # Cleanup memory
+    del map_x_base, map_y_base, current_map_x, current_map_y
+    gc.collect()
+
+    return output_file, mime, dl_name
 
 # --- UI Layout ---
 tab1, tab2 = st.tabs(["Single Image", "Video / Animation"])
