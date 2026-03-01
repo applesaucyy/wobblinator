@@ -241,7 +241,7 @@ with tab1:
         
     btn_col1, btn_col2 = st.columns(2)
     
-    if btn_col1.button("Preview Effect", use_container_width=True, disabled=not uploaded_img):
+    if btn_col1.button("Preview Effect", key="preview_single", use_container_width=True, disabled=not uploaded_img):
         with st.spinner("Generating 2s test loop..."):
             file_bytes = np.asarray(bytearray(uploaded_img.read()), dtype=np.uint8)
             fg_cv_image = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
@@ -250,7 +250,7 @@ with tab1:
             preview_gif = generate_quick_preview(fg_cv_image, s_intensity, s_scale)
             preview_container_single.image(preview_gif, caption="Live Preview (12 FPS)")
             
-    if btn_col2.button("Generate Final Output", type="primary", use_container_width=True, disabled=not uploaded_img):
+    if btn_col2.button("Generate Final Output", key="generate_single", type="primary", use_container_width=True, disabled=not uploaded_img):
         with st.spinner("Processing full sequence..."):
             out_path, mime_type, file_name = process_single_image(uploaded_img, s_fps, s_dur, s_intensity, s_scale, s_export)
             
@@ -293,7 +293,7 @@ with tab2:
         
     btn_col3, btn_col4 = st.columns(2)
     
-    if btn_col3.button("Preview Effect", use_container_width=True, disabled=not vid_data):
+    if btn_col3.button("Preview Effect", key="preview_video", use_container_width=True, disabled=not vid_data):
         with st.spinner("Grabbing first frame and running test loop..."):
             first_frame = get_first_frame(source_type, vid_data)
             
@@ -307,7 +307,7 @@ with tab2:
                 preview_gif = generate_quick_preview(first_frame, v_intensity, v_scale)
                 preview_container_vid.image(preview_gif, caption="Preview Effect on First Frame (12 FPS)")
                 
-    if btn_col4.button("Process Full Animation", type="primary", use_container_width=True, disabled=not vid_data):
+    if btn_col4.button("Process Full Animation", key="generate_video", type="primary", use_container_width=True, disabled=not vid_data):
         with st.spinner("Processing entire video..."):
             out_path, mime_type, file_name = process_animation(source_type, vid_data, v_fps, v_intensity, v_scale, v_export)
             
