@@ -8,8 +8,8 @@ import zipfile
 import shutil
 
 # App Config
-st.set_page_config(page_title="The Wobblinator v4.2", page_icon="〰️")
-st.title("The Wobblinator v4.2 〰️")
+st.set_page_config(page_title="The Wobblinator v4.2", layout="centered")
+st.title("The Wobblinator v4.2")
 st.write("Squigglevision Generator for Da Web")
 
 # --- Core Logic ---
@@ -70,6 +70,59 @@ def export_frames(frames, fps, fmt, w, h):
         shutil.make_archive(zip_base, 'zip', temp_dir)
         shutil.rmtree(temp_dir) # Cleanup raw images
         return f"{zip_base}.zip", "application/zip", "wobbled_sequence.zip"
+
+def generate_quick_preview(cv_img, intensity, scale):
+    """Generates a 2-second 12FPS preview GIF of the current settings."""
+    h, w = cv_img.shape[:2]
+    
+    # Scale down preview if the image is extremely large to save computation time
+    max_dim = 600
+    if max(h, w) > max_dim:
+        ratio = max_dim / max(h, w)
+        w, h = int(w * ratio), int(h * ratio)
+        cv_img = cv2.resize(cv_img, (w, h))
+        
+    fps = 12
+    total_frames = fps * 2 # 2 Seconds of wobble
+    
+    map_x_base, map_y_base = np.meshgrid(np.arange(w), np.arange(h))
+    map_x_base, map_y_base = map_x_base.astype(np.float32), map_y_base.astype(np.float32)
+
+    frames = []
+    for _ in range(total_frames):
+        map_x, map_y = generate_noise_map(w, h, scale, intensity, map_x_base, map_y_base)
+        frame = cv2.remap(cv_img, map_x, map_y, 
+                          interpolation=cv2.INTER_LINEAR, 
+                          borderMode=cv2.BORDER_REPLICATE)
+        frame = composite_on_white(frame)
+        frames.append(frame)
+        
+    tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.gif')
+    pil_frames = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in frames]
+    pil_frames[0].save(tfile.name, save_all=True, append_images=pil_frames[1:], duration=int(1000/fps), loop=0)
+    return tfile.name
+
+def get_first_frame(source_type, source_data):
+    """Extracts the first frame from a video, GIF, or sequence to use as a preview thumbnail."""
+    frame = None
+    if source_type == "video":
+        tfile_in = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+        tfile_in.write(source_data.read())
+        cap = cv2.VideoCapture(tfile_in.name)
+        ret, frame = cap.read()
+        cap.release()
+    elif source_type == "gif":
+        gif_img = Image.open(source_data)
+        gif_img.seek(0)
+        frame_rgba = gif_img.convert("RGBA")
+        bg = Image.new("RGBA", frame_rgba.size, (255, 255, 255, 255))
+        bg.alpha_composite(frame_rgba)
+        frame = cv2.cvtColor(np.array(bg), cv2.COLOR_RGBA2BGR)
+    elif source_type == "sequence":
+        source_data = sorted(source_data, key=lambda x: x.name)
+        file_bytes = np.asarray(bytearray(source_data[0].read()), dtype=np.uint8)
+        frame = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
+    return frame
 
 def process_single_image(image_file, fps, duration, intensity, scale, export_fmt):
     file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
@@ -175,6 +228,8 @@ with tab1:
     st.header("Single Image Animation")
     uploaded_img = st.file_uploader("Upload Image", type=['png', 'jpg', 'jpeg'])
     
+    preview_container_single = st.empty()
+    
     col1, col2 = st.columns(2)
     with col1:
         s_intensity = st.slider("Wobble Intensity", 1, 20, 1, key="s_int")
@@ -184,8 +239,19 @@ with tab1:
         s_scale = st.slider("Wave Scale", 5, 100, 20, key="s_sc")
         s_dur = st.number_input("Duration (sec)", value=3, key="s_dur")
         
-    if uploaded_img and st.button("Generate Image Wobble", use_container_width=True):
-        with st.spinner("Processing..."):
+    btn_col1, btn_col2 = st.columns(2)
+    
+    if btn_col1.button("Preview Effect", use_container_width=True, disabled=not uploaded_img):
+        with st.spinner("Generating 2s test loop..."):
+            file_bytes = np.asarray(bytearray(uploaded_img.read()), dtype=np.uint8)
+            fg_cv_image = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
+            uploaded_img.seek(0) # Reset file pointer for the generator
+            
+            preview_gif = generate_quick_preview(fg_cv_image, s_intensity, s_scale)
+            preview_container_single.image(preview_gif, caption="Live Preview (12 FPS)")
+            
+    if btn_col2.button("Generate Final Output", type="primary", use_container_width=True, disabled=not uploaded_img):
+        with st.spinner("Processing full sequence..."):
             out_path, mime_type, file_name = process_single_image(uploaded_img, s_fps, s_dur, s_intensity, s_scale, s_export)
             
             if s_export == "MP4 Video":
@@ -197,6 +263,7 @@ with tab1:
                 
             with open(out_path, 'rb') as f:
                 st.download_button("Download Output", f, file_name=file_name, mime=mime_type, use_container_width=True)
+
 
 with tab2:
     st.header("Animation Source")
@@ -213,6 +280,8 @@ with tab2:
         vid_data = uploaded_vid if len(uploaded_vid) > 0 else None
         if vid_data: st.info(f"{len(vid_data)} images loaded.")
 
+    preview_container_vid = st.empty()
+
     st.subheader("Wobble Physics")
     col3, col4 = st.columns(2)
     with col3:
@@ -222,8 +291,24 @@ with tab2:
         v_scale = st.slider("Wave Scale", 5, 100, 20, key="v_sc")
         v_export = st.selectbox("Export Format", ["MP4 Video", "GIF Animation", "PNG Sequence (ZIP)"], key="v_exp")
         
-    if vid_data and st.button("Process Animation", type="primary", use_container_width=True):
-        with st.spinner("Processing..."):
+    btn_col3, btn_col4 = st.columns(2)
+    
+    if btn_col3.button("Preview Effect", use_container_width=True, disabled=not vid_data):
+        with st.spinner("Grabbing first frame and running test loop..."):
+            first_frame = get_first_frame(source_type, vid_data)
+            
+            # Reset file pointers so the final generator doesn't miss the first frame
+            if source_type == "sequence":
+                vid_data[0].seek(0)
+            else:
+                vid_data.seek(0)
+                
+            if first_frame is not None:
+                preview_gif = generate_quick_preview(first_frame, v_intensity, v_scale)
+                preview_container_vid.image(preview_gif, caption="Preview Effect on First Frame (12 FPS)")
+                
+    if btn_col4.button("Process Full Animation", type="primary", use_container_width=True, disabled=not vid_data):
+        with st.spinner("Processing entire video..."):
             out_path, mime_type, file_name = process_animation(source_type, vid_data, v_fps, v_intensity, v_scale, v_export)
             
             if v_export == "MP4 Video":
