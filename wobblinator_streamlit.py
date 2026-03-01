@@ -4,177 +4,17 @@ import numpy as np
 from PIL import Image
 import tempfile
 import os
-import subprocess
+import zipfile
 import shutil
-import gc
 
-st.set_page_config(page_title="The Wobblinator", page_icon="〰️", layout="centered")
+# App Config
+st.set_page_config(page_title="The Wobblinator v4.2", page_icon="〰️")
+st.title("The Wobblinator v4.2 〰️")
+st.write("Squigglevision Generator for Da Web")
 
-MAX_FILE_SIZE_MB = 100
-MAX_DIMENSION = 1080
-
-st.markdown("""
-<style>
-    :root {
-        --bg-color: #0f0f13;
-        --glass-bg: rgba(255, 255, 255, 0.05);
-        --glass-border: rgba(255, 255, 255, 0.1);
-        --text-main: #ffffff;
-        --accent-color: #6366f1;
-    }
-
-    .stApp {
-        background-color: var(--bg-color);
-        background-image: 
-            radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.1) 0%, transparent 40%),
-            radial-gradient(circle at 90% 80%, rgba(236, 72, 153, 0.1) 0%, transparent 40%);
-        color: var(--text-main);
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    }
-
-    .block-container {
-        background: var(--glass-bg);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        border: 1px solid var(--glass-border);
-        border-radius: 24px;
-        padding: 3rem !important;
-        margin-top: 2rem;
-        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.36);
-        max-width: 800px;
-    }
-
-    header, footer, #MainMenu {visibility: hidden;}
-
-    h1 {
-        font-weight: 300;
-        letter-spacing: 1px;
-        text-align: center;
-        text-shadow: 0 0 20px rgba(255,255,255,0.1);
-    }
-    h1 span {
-        font-weight: 700;
-        color: var(--accent-color);
-    }
-
-    .stTabs [data-baseweb="tab-list"] {
-        background: transparent;
-        gap: 10px;
-        margin-bottom: 20px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        background-color: rgba(255,255,255,0.03);
-        border-radius: 12px;
-        border: 1px solid var(--glass-border);
-        color: #a1a1aa;
-        padding: 10px 20px;
-        transition: all 0.2s;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: var(--accent-color) !important;
-        color: white !important;
-        border-color: var(--accent-color);
-    }
-    
-    .stTabs [data-baseweb="tab-highlight"] {
-        display: none;
-    }
-    .stTabs [data-baseweb="tab-border"] {
-        display: none;
-    }
-
-    .stButton > button {
-        background: var(--glass-bg);
-        border: 1px solid var(--glass-border);
-        color: white;
-        border-radius: 16px;
-        padding: 0.75rem 1.5rem;
-        font-weight: 600;
-        transition: all 0.2s;
-        width: 100%;
-        backdrop-filter: blur(4px);
-    }
-    .stButton > button:hover {
-        background: rgba(255,255,255,0.1);
-        border-color: var(--accent-color);
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
-    }
-
-    .stSlider > div > div > div > div { background-color: var(--accent-color); }
-    .stNumberInput input { color: white; background: rgba(0,0,0,0.2); border-radius: 8px; }
-    
-    .stProgress > div > div > div > div {
-        background-image: none !important;
-        background-color: var(--accent-color) !important;
-    }
-    
-    [data-testid="stFileUploader"] {
-        background: rgba(0,0,0,0.2);
-        border: 2px dashed var(--glass-border);
-        border-radius: 16px;
-        padding: 2rem;
-        transition: all 0.3s;
-    }
-    [data-testid="stFileUploader"]:hover {
-        border-color: rgba(255,255,255,0.4);
-        background: rgba(255,255,255,0.02);
-    }
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown("<h1>The <span>Wobblinator</span></h1>", unsafe_allow_html=True)
-
-def cleanup_files(*filepaths):
-    for path in filepaths:
-        if path and os.path.exists(path):
-            try:
-                os.remove(path)
-            except:
-                pass
-
-def check_file_size(file):
-    if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
-        st.error(f"File too large. Please keep uploads under {MAX_FILE_SIZE_MB}MB to prevent crashes.")
-        return False
-    return True
-
-def convert_to_h264(input_path):
-    fd, output_path = tempfile.mkstemp(suffix=".mp4")
-    os.close(fd)
-    
-    if shutil.which("ffmpeg") is None:
-        st.error("Error: FFmpeg not installed on server.")
-        return input_path
-
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", input_path,
-        "-vcodec", "libx264",
-        "-pix_fmt", "yuv420p",
-        "-acodec", "aac",
-        "-movflags", "+faststart",
-        output_path
-    ]
-    
-    try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return output_path
-    except subprocess.CalledProcessError:
-        return input_path
-
-def resize_if_needed(image, max_dim=MAX_DIMENSION):
-    h, w = image.shape[:2]
-    if max(h, w) > max_dim:
-        scale_factor = max_dim / max(h, w)
-        new_w = int(w * scale_factor)
-        new_h = int(h * scale_factor)
-        return cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA), scale_factor
-    return image, 1.0
-
+# --- Core Logic ---
 def generate_noise_map(w, h, wave_scale, intensity, map_x_base, map_y_base):
-    # Ensure minimum scale prevents grid collapse on small images
-    safe_scale = max(2, wave_scale)
+    safe_scale = max(5, wave_scale)
     grid_w = max(3, int(w / safe_scale))
     grid_h = max(3, int(h / safe_scale))
     
@@ -188,237 +28,210 @@ def generate_noise_map(w, h, wave_scale, intensity, map_x_base, map_y_base):
     map_y = map_y_base + (noise_y_full * intensity * 3)
     return map_x, map_y
 
-def process_single_image(image_file, background_file, fps, duration, intensity, scale):
-    tfile_raw_path = None
-    final_path = None
-    
-    try:
-        file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
-        fg_cv_image = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
-        
-        # Resize and get the ratio to adjust physics
-        fg_cv_image, ratio = resize_if_needed(fg_cv_image)
-        h, w = fg_cv_image.shape[:2]
-        
-        # Adjust params to match visual appearance of original resolution
-        eff_intensity = max(0.5, intensity * ratio)
-        eff_scale = max(2, scale * ratio)
-        
-        bg_cv_image = None
-        if background_file:
-            bg_bytes = np.asarray(bytearray(background_file.read()), dtype=np.uint8)
-            bg_raw = cv2.imdecode(bg_bytes, cv2.IMREAD_UNCHANGED)
-            bg_cv_image = cv2.resize(bg_raw, (w, h))
-            if len(bg_cv_image.shape) == 3 and bg_cv_image.shape[2] == 4:
-                bg_cv_image = cv2.cvtColor(bg_cv_image, cv2.COLOR_BGRA2BGR)
-            elif len(bg_cv_image.shape) == 2:
-                bg_cv_image = cv2.cvtColor(bg_cv_image, cv2.COLOR_GRAY2BGR)
+def composite_on_white(cv_img):
+    """Composites images with alpha channels onto a solid white background."""
+    if len(cv_img.shape) == 3 and cv_img.shape[2] == 4:
+        img_pil = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGRA2RGBA))
+        bg_white = Image.new("RGBA", img_pil.size, (255, 255, 255, 255))
+        bg_white.alpha_composite(img_pil)
+        return cv2.cvtColor(np.array(bg_white), cv2.COLOR_RGBA2BGR)
+    elif len(cv_img.shape) == 3 and cv_img.shape[2] == 3:
+        return cv_img
+    else:
+        return cv2.cvtColor(cv_img, cv2.COLOR_GRAY2BGR)
 
-        total_frames = int(fps * duration)
-        frames_per_update = max(1, int(fps / 12))
-        
-        map_x_base, map_y_base = np.meshgrid(np.arange(w), np.arange(h))
-        map_x_base = map_x_base.astype(np.float32)
-        map_y_base = map_y_base.astype(np.float32)
-        
-        tfile_raw = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        tfile_raw_path = tfile_raw.name
-        tfile_raw.close()
-        
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
-        out = cv2.VideoWriter(tfile_raw_path, fourcc, fps, (w, h))
-
-        progress_bar = st.progress(0)
-        current_map_x, current_map_y = None, None
-
-        for i in range(total_frames):
-            if i % frames_per_update == 0 or current_map_x is None:
-                current_map_x, current_map_y = generate_noise_map(w, h, eff_scale, eff_intensity, map_x_base, map_y_base)
-                
-            frame = cv2.remap(fg_cv_image, current_map_x, current_map_y, 
-                              interpolation=cv2.INTER_LINEAR, 
-                              borderMode=cv2.BORDER_REPLICATE)
+def export_frames(frames, fps, fmt, w, h):
+    """Handles exporting the generated frames into the requested format."""
+    if fmt == "MP4 Video":
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+        fourcc = cv2.VideoWriter_fourcc(*'avc1') 
+        out = cv2.VideoWriter(tfile.name, fourcc, fps, (w, h))
+        if not out.isOpened():
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(tfile.name, fourcc, fps, (w, h))
             
-            if frame.shape[2] == 4:
-                b,g,r,a = cv2.split(frame)
-                overlay = cv2.merge((b,g,r))
-                mask = a / 255.0
-                
-                if bg_cv_image is not None:
-                    base = bg_cv_image
-                else:
-                    base = np.ones_like(overlay, dtype=np.uint8) * 255
-                
-                mask_3d = np.dstack([mask]*3)
-                frame = (base * (1.0 - mask_3d) + overlay * mask_3d).astype(np.uint8)
-
+        for frame in frames:
             out.write(frame)
-            
-            del frame
-            if i % 10 == 0:
-                gc.collect()
-                
-            progress_bar.progress((i + 1) / total_frames)
-            
         out.release()
-        gc.collect()
+        return tfile.name, "video/mp4", "wobbled.mp4"
         
-        final_path = convert_to_h264(tfile_raw_path)
+    elif fmt == "GIF Animation":
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.gif')
+        pil_frames = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in frames]
+        pil_frames[0].save(tfile.name, save_all=True, append_images=pil_frames[1:], duration=int(1000/fps), loop=0)
+        return tfile.name, "image/gif", "wobbled.gif"
         
-        with open(final_path, 'rb') as f:
-            video_bytes = f.read()
+    elif fmt == "PNG Sequence (ZIP)":
+        temp_dir = tempfile.mkdtemp()
+        for i, frame in enumerate(frames):
+            cv2.imwrite(os.path.join(temp_dir, f"image_{i+1:04d}.png"), frame)
             
-        return video_bytes
-        
-    finally:
-        cleanup_files(tfile_raw_path, final_path)
-        gc.collect()
+        zip_base = tempfile.NamedTemporaryFile(delete=False).name
+        shutil.make_archive(zip_base, 'zip', temp_dir)
+        shutil.rmtree(temp_dir) # Cleanup raw images
+        return f"{zip_base}.zip", "application/zip", "wobbled_sequence.zip"
 
-def process_video_file(video_file, out_fps, intensity, scale):
-    tfile_in_path = None
-    tfile_raw_path = None
-    final_path = None
-    cap = None
-    out = None
+def process_single_image(image_file, fps, duration, intensity, scale, export_fmt):
+    file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
+    fg_cv_image = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
     
-    try:
-        tfile_in = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        tfile_in_path = tfile_in.name
-        tfile_in.write(video_file.getbuffer())
-        tfile_in.close()
-        
-        cap = cv2.VideoCapture(tfile_in_path)
-        if not cap.isOpened():
-            st.error("Error reading video file.")
-            return None
-            
-        w_orig = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h_orig = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
-        scale_factor = 1.0
-        if max(w_orig, h_orig) > MAX_DIMENSION:
-            scale_factor = MAX_DIMENSION / max(w_orig, h_orig)
-            w = int(w_orig * scale_factor)
-            h = int(h_orig * scale_factor)
-        else:
-            w, h = w_orig, h_orig
-            
-        # Adjust params based on resize ratio
-        eff_intensity = max(0.5, intensity * scale_factor)
-        eff_scale = max(2, scale * scale_factor)
-        
-        tfile_raw = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        tfile_raw_path = tfile_raw.name
-        tfile_raw.close()
-        
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(tfile_raw_path, fourcc, out_fps, (w, h))
+    h, w = fg_cv_image.shape[:2]
+    total_frames = int(fps * duration)
+    
+    updates_per_sec = 12
+    frames_per_update = max(1, int(fps / updates_per_sec))
+    
+    map_x_base, map_y_base = np.meshgrid(np.arange(w), np.arange(h))
+    map_x_base = map_x_base.astype(np.float32)
+    map_y_base = map_y_base.astype(np.float32)
 
-        frames_per_update = max(1, int(out_fps / 12))
+    progress_bar = st.progress(0)
+    current_map_x, current_map_y = None, None
+    processed_frames = []
+
+    for i in range(total_frames):
+        if i % frames_per_update == 0 or current_map_x is None:
+            current_map_x, current_map_y = generate_noise_map(w, h, scale, intensity, map_x_base, map_y_base)
+            
+        frame = cv2.remap(fg_cv_image, current_map_x, current_map_y, 
+                          interpolation=cv2.INTER_LINEAR, 
+                          borderMode=cv2.BORDER_REPLICATE)
         
-        map_x_base, map_y_base = np.meshgrid(np.arange(w), np.arange(h))
-        map_x_base = map_x_base.astype(np.float32)
-        map_y_base = map_y_base.astype(np.float32)
+        frame = composite_on_white(frame)
+        processed_frames.append(frame)
+        progress_bar.progress((i + 1) / total_frames)
         
-        current_map_x, current_map_y = None, None
-        frame_count = 0
-        progress_bar = st.progress(0)
-        
-        while True:
+    return export_frames(processed_frames, fps, export_fmt, w, h)
+
+def process_animation(source_type, source_data, out_fps, intensity, scale, export_fmt):
+    processed_frames = []
+    cap = None
+    gif_img = None
+    
+    if source_type == "video":
+        tfile_in = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+        tfile_in.write(source_data.read())
+        cap = cv2.VideoCapture(tfile_in.name)
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    elif source_type == "gif":
+        gif_img = Image.open(source_data)
+        total_frames = gif_img.n_frames
+        w, h = gif_img.size
+    elif source_type == "sequence":
+        source_data = sorted(source_data, key=lambda x: x.name)
+        total_frames = len(source_data)
+        first_frame = cv2.imdecode(np.asarray(bytearray(source_data[0].read()), dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        h, w = first_frame.shape[:2]
+        source_data[0].seek(0)
+
+    updates_per_sec = 12
+    frames_per_update = max(1, int(out_fps / updates_per_sec))
+    
+    map_x_base, map_y_base = np.meshgrid(np.arange(w), np.arange(h))
+    map_x_base, map_y_base = map_x_base.astype(np.float32), map_y_base.astype(np.float32)
+    
+    current_map_x, current_map_y = None, None
+    progress_bar = st.progress(0)
+    
+    for frame_count in range(total_frames):
+        frame = None
+        if source_type == "video":
             ret, frame = cap.read()
             if not ret: break
-            
-            if scale_factor < 1.0:
-                frame = cv2.resize(frame, (w, h), interpolation=cv2.INTER_AREA)
-            
-            if frame_count % frames_per_update == 0 or current_map_x is None:
-                 current_map_x, current_map_y = generate_noise_map(w, h, eff_scale, eff_intensity, map_x_base, map_y_base)
-                 
-            distorted = cv2.remap(frame, current_map_x, current_map_y, 
+        elif source_type == "gif":
+            gif_img.seek(frame_count)
+            frame_rgba = gif_img.convert("RGBA")
+            bg = Image.new("RGBA", frame_rgba.size, (255, 255, 255, 255))
+            bg.alpha_composite(frame_rgba)
+            frame = cv2.cvtColor(np.array(bg), cv2.COLOR_RGBA2BGR)
+        elif source_type == "sequence":
+            file_bytes = np.asarray(bytearray(source_data[frame_count].read()), dtype=np.uint8)
+            frame = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
+            if frame is None: break
+            if frame.shape[:2] != (h, w):
+                frame = cv2.resize(frame, (w, h))
+            frame = composite_on_white(frame)
+
+        if frame_count % frames_per_update == 0 or current_map_x is None:
+             current_map_x, current_map_y = generate_noise_map(w, h, scale, intensity, map_x_base, map_y_base)
+             
+        distorted_frame = cv2.remap(frame, current_map_x, current_map_y, 
                                   interpolation=cv2.INTER_LINEAR, 
                                   borderMode=cv2.BORDER_REPLICATE)
-            out.write(distorted)
-            
-            del frame, distorted
-            if frame_count % 10 == 0:
-                gc.collect()
-            
-            frame_count += 1
-            if total_frames > 0:
-                progress_bar.progress(min(frame_count / total_frames, 1.0))
-                
-        out.release()
-        cap.release()
-        gc.collect()
+        processed_frames.append(distorted_frame)
         
-        final_path = convert_to_h264(tfile_raw_path)
-        
-        with open(final_path, 'rb') as f:
-            video_bytes = f.read()
+        if total_frames > 0:
+            progress_bar.progress(min((frame_count + 1) / total_frames, 1.0))
             
-        return video_bytes
-        
-    finally:
-        if cap and cap.isOpened(): cap.release()
-        if out and out.isOpened(): out.release()
-        cleanup_files(tfile_in_path, tfile_raw_path, final_path)
-        gc.collect()
+    if cap: cap.release()
+    return export_frames(processed_frames, out_fps, export_fmt, w, h)
 
-tab1, tab2 = st.tabs(["Single Image", "Video Import"])
+# --- UI Layout ---
+tab1, tab2 = st.tabs(["Single Image", "Video / Animation"])
 
 with tab1:
     st.header("Single Image Animation")
-    
-    use_2_layer = st.checkbox("Enable 2-Layer Mode (Static Background)", value=False)
-    
-    col_u1, col_u2 = st.columns(2)
-    with col_u1:
-        fg_label = "Foreground (Lineart)" if use_2_layer else "Upload Image"
-        uploaded_img = st.file_uploader(fg_label, type=['png', 'jpg', 'jpeg'], key="fg")
-    
-    with col_u2:
-        uploaded_bg = None
-        if use_2_layer:
-            uploaded_bg = st.file_uploader("Background (Static)", type=['png', 'jpg', 'jpeg'], key="bg")
+    uploaded_img = st.file_uploader("Upload Image", type=['png', 'jpg', 'jpeg'])
     
     col1, col2 = st.columns(2)
     with col1:
-        s_intensity = st.slider("Wobblemeat Intensity", 1, 20, 1, key="s_int")
-        s_fps = st.number_input("FPS", value=12, key="s_fps")
+        s_intensity = st.slider("Wobble Intensity", 1, 20, 1, key="s_int")
+        s_fps = st.number_input("FPS", value=24, key="s_fps")
+        s_export = st.selectbox("Export Format", ["MP4 Video", "GIF Animation", "PNG Sequence (ZIP)"], key="s_exp")
     with col2:
         s_scale = st.slider("Wave Scale", 5, 100, 20, key="s_sc")
         s_dur = st.number_input("Duration (sec)", value=3, key="s_dur")
         
-    if uploaded_img and st.button("Generate Image Wobble"):
-        if check_file_size(uploaded_img):
-            if use_2_layer and uploaded_bg:
-                if not check_file_size(uploaded_bg):
-                    st.stop()
+    if uploaded_img and st.button("Generate Image Wobble", use_container_width=True):
+        with st.spinner("Processing..."):
+            out_path, mime_type, file_name = process_single_image(uploaded_img, s_fps, s_dur, s_intensity, s_scale, s_export)
             
-            if use_2_layer and not uploaded_bg:
-                st.error("Please upload a background image for 2-layer mode.")
+            if s_export == "MP4 Video":
+                st.video(out_path)
+            elif s_export == "GIF Animation":
+                st.image(out_path)
             else:
-                with st.spinner("Processing..."):
-                    video_bytes = process_single_image(uploaded_img, uploaded_bg, s_fps, s_dur, s_intensity, s_scale)
-                    if video_bytes:
-                        st.video(video_bytes, autoplay=True, loop=True)
-                        st.download_button("Download Video", data=video_bytes, file_name="wobble_image.mp4", mime="video/mp4")
+                st.success("Sequence successfully zipped!")
+                
+            with open(out_path, 'rb') as f:
+                st.download_button("Download Output", f, file_name=file_name, mime=mime_type, use_container_width=True)
 
 with tab2:
-    uploaded_vid = st.file_uploader("Upload Video", type=['mp4', 'mov', 'avi'])
+    st.header("Animation Source")
     
+    source_opt = st.radio("Source Type", ["Video / GIF File", "Image Sequence (Multiple Files)"])
+    
+    if source_opt == "Video / GIF File":
+        uploaded_vid = st.file_uploader("Upload Video/GIF", type=['mp4', 'mov', 'avi', 'gif'])
+        source_type = "gif" if uploaded_vid and uploaded_vid.name.lower().endswith(".gif") else "video"
+        vid_data = uploaded_vid
+    else:
+        uploaded_vid = st.file_uploader("Upload Image Sequence", type=['png', 'jpg', 'jpeg', 'bmp'], accept_multiple_files=True)
+        source_type = "sequence"
+        vid_data = uploaded_vid if len(uploaded_vid) > 0 else None
+        if vid_data: st.info(f"{len(vid_data)} images loaded.")
+
+    st.subheader("Wobble Physics")
     col3, col4 = st.columns(2)
     with col3:
-        v_intensity = st.slider("Wobblemeat Intensity", 1, 20, 1, key="v_int")
+        v_intensity = st.slider("Wobble Intensity", 1, 20, 1, key="v_int")
+        v_fps = st.number_input("Output FPS", value=24, key="v_fps")
     with col4:
         v_scale = st.slider("Wave Scale", 5, 100, 20, key="v_sc")
-        v_fps = st.number_input("Output FPS", value=24, key="v_fps")
+        v_export = st.selectbox("Export Format", ["MP4 Video", "GIF Animation", "PNG Sequence (ZIP)"], key="v_exp")
         
-    if uploaded_vid and st.button("Generate Video Wobble"):
-        if check_file_size(uploaded_vid):
-            with st.spinner("Processing..."):
-                video_bytes = process_video_file(uploaded_vid, v_fps, v_intensity, v_scale)
-                if video_bytes:
-                    st.video(video_bytes, autoplay=True, loop=True)
-                    st.download_button("Download Video", data=video_bytes, file_name="wobble_video.mp4", mime="video/mp4")
+    if vid_data and st.button("Process Animation", type="primary", use_container_width=True):
+        with st.spinner("Processing..."):
+            out_path, mime_type, file_name = process_animation(source_type, vid_data, v_fps, v_intensity, v_scale, v_export)
+            
+            if v_export == "MP4 Video":
+                st.video(out_path)
+            elif v_export == "GIF Animation":
+                st.image(out_path)
+            else:
+                st.success("Sequence successfully zipped!")
+                
+            with open(out_path, 'rb') as f:
+                st.download_button("Download Output", f, file_name=file_name, mime=mime_type, use_container_width=True)
